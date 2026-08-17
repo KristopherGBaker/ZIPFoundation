@@ -19,7 +19,7 @@ extension Archive {
         let file: FILEPointer
         let endOfCentralDirectoryRecord: EndOfCentralDirectoryRecord
         let zip64EndOfCentralDirectory: ZIP64EndOfCentralDirectory?
-        #if swift(>=5.0) && (os(macOS) || os(iOS) || os(tvOS) || os(visionOS) || os(watchOS) || os(Linux))
+        #if swift(>=5.0) && (os(macOS) || os(iOS) || os(tvOS) || os(visionOS) || os(watchOS) || os(Linux) || os(Android))
         let memoryFile: MemoryFile?
 
         init(file: FILEPointer,
@@ -85,7 +85,7 @@ extension Archive {
         }
     }
 
-    #if swift(>=5.0) && (os(macOS) || os(iOS) || os(tvOS) || os(visionOS) || os(watchOS) || os(Linux))
+    #if swift(>=5.0) && (os(macOS) || os(iOS) || os(tvOS) || os(visionOS) || os(watchOS) || os(Linux) || os(Android))
     static func makeBackingConfiguration(for data: Data, mode: AccessMode) throws
     -> BackingConfiguration {
         let memoryFile = MemoryFile(data: data)
@@ -108,8 +108,12 @@ extension Archive {
                                                                           offsetToStartOfCentralDirectory: 0,
                                                                           zipFileCommentLength: 0,
                                                                           zipFileCommentData: Data())
-            _ = endOfCentralDirectoryRecord.data.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) in
-                fwrite(buffer.baseAddress, buffer.count, 1, archiveFile) // Errors handled during read
+            endOfCentralDirectoryRecord.data.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) in
+                // Bionic annotates fwrite's buffer _Nonnull, so the base address has to be
+                // unwrapped rather than passed through as an Optional. It is never nil here:
+                // the record is a fixed 22 bytes.
+                guard let baseAddress = buffer.baseAddress else { return }
+                fwrite(baseAddress, buffer.count, 1, archiveFile) // Errors handled during read
             }
             fallthrough
         case .update:

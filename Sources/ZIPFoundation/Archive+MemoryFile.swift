@@ -17,7 +17,7 @@ extension Archive {
 // In-memory archives rely on a `FILE*`-shaped userspace stream API:
 // `funopen` on Apple, `fopencookie` on Linux glibc. File-backed archives
 // continue to work on platforms without a compatible userspace stream API.
-#if swift(>=5.0) && (os(macOS) || os(iOS) || os(tvOS) || os(visionOS) || os(watchOS) || os(Linux))
+#if swift(>=5.0) && (os(macOS) || os(iOS) || os(tvOS) || os(visionOS) || os(watchOS) || os(Linux) || os(Android))
 
 extension Archive {
 
@@ -32,7 +32,7 @@ extension Archive {
 
         func open(mode: AccessMode) throws -> FILEPointer {
             let cookie = Unmanaged.passRetained(self)
-            #if os(macOS) || os(iOS) || os(tvOS) || os(visionOS) || os(watchOS)
+            #if os(macOS) || os(iOS) || os(tvOS) || os(visionOS) || os(watchOS) || os(Android)
             guard let result = mode.isWritable
                 ? funopen(cookie.toOpaque(), readStub, writeStub, seekStub, closeStub)
                 : funopen(cookie.toOpaque(), readStub, nil, seekStub, closeStub)
@@ -102,14 +102,48 @@ private func fileFromCookie(cookie: UnsafeRawPointer) -> Archive.MemoryFile {
     return Unmanaged<Archive.MemoryFile>.fromOpaque(cookie).takeUnretainedValue()
 }
 
+#if !os(Android)
 private func closeStub(_ cookie: UnsafeMutableRawPointer?) -> Int32 {
     if let cookie = cookie {
         Unmanaged<Archive.MemoryFile>.fromOpaque(cookie).release()
     }
     return 0
 }
+#endif
 
-#if os(macOS) || os(iOS) || os(tvOS) || os(visionOS) || os(watchOS)
+#if os(Android)
+
+// Bionic has `funopen` (API 24+) but no `fopencookie`, so Android takes the BSD
+// branch rather than the glibc one. Its callbacks are shaped exactly like Apple's
+// except that Bionic annotates every pointer parameter `_Nonnull`, which imports as
+// non-optional and will not bind to the stubs above. Same bodies, tighter signatures.
+
+private func readStub(_ cookie: UnsafeMutableRawPointer,
+                      _ bytePtr: UnsafeMutablePointer<Int8>,
+                      _ count: Int32) -> Int32 {
+    return Int32(fileFromCookie(cookie: cookie).readData(
+                    buffer: UnsafeMutableRawBufferPointer(start: bytePtr, count: Int(count))))
+}
+
+private func writeStub(_ cookie: UnsafeMutableRawPointer,
+                       _ bytePtr: UnsafePointer<Int8>,
+                       _ count: Int32) -> Int32 {
+    return Int32(fileFromCookie(cookie: cookie).writeData(
+                    buffer: UnsafeRawBufferPointer(start: bytePtr, count: Int(count))))
+}
+
+private func seekStub(_ cookie: UnsafeMutableRawPointer,
+                      _ offset: fpos_t,
+                      _ whence: Int32) -> fpos_t {
+    return fpos_t(fileFromCookie(cookie: cookie).seek(offset: Int(offset), whence: whence))
+}
+
+private func closeStub(_ cookie: UnsafeMutableRawPointer) -> Int32 {
+    Unmanaged<Archive.MemoryFile>.fromOpaque(cookie).release()
+    return 0
+}
+
+#elseif os(macOS) || os(iOS) || os(tvOS) || os(visionOS) || os(watchOS)
 
 private func readStub(_ cookie: UnsafeMutableRawPointer?,
                       _ bytePtr: UnsafeMutablePointer<Int8>?,
